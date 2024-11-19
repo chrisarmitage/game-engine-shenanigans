@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -9,6 +10,7 @@ type Task struct {
 	Name     string
 	Consumes map[string]int
 	Produces map[string]int
+	Requires string
 }
 
 type Worker struct {
@@ -17,25 +19,34 @@ type Worker struct {
 }
 
 type Game struct {
-	AvailableTasks []Task
-	Workers        []Worker
-	State          map[string]int
+	AvailableTasks     []Task
+	AvailableBuildings []Building
+	Workers            []Worker
+	State              map[string]int
+	Buildings          map[string]int
 }
 
 func main() {
 	game := Game{
-		AvailableTasks: generateAvailableTasks(),
+		AvailableTasks:     generateAvailableTasks(),
+		AvailableBuildings: generateBuildingList(),
 		Workers: []Worker{
 			{
 				Name: "Bob",
 			},
 		},
 		State: map[string]int{
-			"Wood":  0,
-			"Stone": 0,
-			"Ore":   0,
-			"Pipe":  0,
-			"House": 0,
+			"Wood":     0,
+			"Stone":    0,
+			"Ore":      0,
+			"Pipe":     0,
+			"Resident": 0,
+		},
+		Buildings: map[string]int{
+			"Forest":  1,
+			"Quarry":  0,
+			"Mine":    0,
+			"Factory": 0,
 		},
 	}
 
@@ -45,29 +56,36 @@ func main() {
 		<-ticker.C
 
 		fmt.Printf(
-			"** Resources: W %d, S %d, O %d, P %d, H %d\n",
+			"\n** Resources: W %d, S %d, O %d, P %d -- F %d, Q %d, M %d, Fc %d, H %d\n",
 			game.State["Wood"],
-			game.State["Stone"], 
+			game.State["Stone"],
 			game.State["Ore"],
 			game.State["Pipe"],
-			game.State["House"],
+
+			game.Buildings["Forest"],
+			game.Buildings["Quarry"],
+			game.Buildings["Mine"],
+			game.Buildings["Factory"],
+			game.Buildings["House"],
 		)
 
-		if game.State["House"] == 1 {
-			fmt.Println("3 houses built")
+		if game.State["Resident"] == 1 {
+			fmt.Println("resident moved in!")
 			return
 		}
 
 		if game.Workers[0].ActiveTask == nil {
-			// Don't have 3 houses, build a house
-			task := game.generateActiveTask("House")
+			// Final target, get a Resident
+			task := game.generateActiveTask("Resident")
 			game.Workers[0].ActiveTask = task
-			fmt.Println("   starting new task:", task.Name)
+			if task != nil {
+				//fmt.Println("   starting new task:", task.Name)
+			}
 			continue
 		}
 
 		// Already had a task, complete it
-		fmt.Println("   completing task:", game.Workers[0].ActiveTask.Name)
+		// fmt.Println("   completing task:", game.Workers[0].ActiveTask.Name)
 		for produce, produceAmount := range game.Workers[0].ActiveTask.Produces {
 			game.State[produce] += produceAmount
 			for consumes, consumesAmount := range game.Workers[0].ActiveTask.Consumes {
@@ -81,11 +99,44 @@ func main() {
 }
 
 func (g *Game) generateActiveTask(target string) *Task {
+	// Check for a build task first
+	if strings.HasPrefix(target, "build:") {
+		buildingName := strings.TrimPrefix(target, "build:")
+
+		for _, building := range g.AvailableBuildings {
+			if building.Name == buildingName {
+				// Is there enough resources for the build
+				for consume, consumeAmount := range building.Requires {
+					// fmt.Printf("   %s requires %d x %s, got %d\n", target, consumeAmount, consume, g.State[consume])
+					if g.State[consume] < consumeAmount {
+						return g.generateActiveTask(consume)
+					}
+				}
+
+				// Enough resources
+				fmt.Println("building", buildingName)
+				g.Buildings[buildingName]++
+				for consumes, consumesAmount := range building.Requires {
+					g.State[consumes] -= consumesAmount
+				}
+				return nil
+			}
+		}
+	}
+
+	// Do a resource task
 	for _, task := range g.AvailableTasks {
 		if _, ok := task.Produces[target]; ok {
 			// Check requirements
+
+			// Do we have the required building
+			if task.Requires != "" && g.Buildings[task.Requires] == 0 {
+				return g.generateActiveTask(fmt.Sprintf("build:%s", task.Requires))
+			}
+
+			// Is there enough resources for the task
 			for consume, consumeAmount := range task.Consumes {
-				fmt.Printf("   %s requires %d x %s, got %d\n", target, consumeAmount, consume, g.State[consume])
+				//fmt.Printf("   %s requires %d x %s, got %d\n", target, consumeAmount, consume, g.State[consume])
 				if g.State[consume] < consumeAmount {
 					return g.generateActiveTask(consume)
 				}
@@ -105,6 +156,7 @@ func generateAvailableTasks() []Task {
 			Produces: map[string]int{
 				"Wood": 1,
 			},
+			Requires: "Forest",
 		},
 		{
 			Name:     "Collect Stone",
@@ -112,6 +164,7 @@ func generateAvailableTasks() []Task {
 			Produces: map[string]int{
 				"Stone": 1,
 			},
+			Requires: "Quarry",
 		},
 		{
 			Name:     "Collect Ore",
@@ -119,6 +172,7 @@ func generateAvailableTasks() []Task {
 			Produces: map[string]int{
 				"Ore": 1,
 			},
+			Requires: "Mine",
 		},
 		{
 			Name: "Make Pipes",
@@ -128,19 +182,62 @@ func generateAvailableTasks() []Task {
 			Produces: map[string]int{
 				"Pipe": 1,
 			},
+			Requires: "Factory",
 		},
 		{
-			Name: "Build House",
-			Consumes: map[string]int{
-				"Wood":  4,
-				"Stone": 2,
-				"Pipe":  2,
-			},
+			Name:     "Move in",
+			Consumes: map[string]int{},
 			Produces: map[string]int{
-				"House": 1,
+				"Resident": 1,
 			},
+			Requires: "House",
 		},
 	}
 
 	return tasks
+}
+
+type Building struct {
+	Name     string
+	Requires map[string]int
+}
+
+func generateBuildingList() []Building {
+	buildings := []Building{
+		{
+			Name: "Forest",
+			Requires: map[string]int{
+				"Wood": 10,
+			},
+		},
+		{
+			Name: "Quarry",
+			Requires: map[string]int{
+				"Wood": 10,
+			},
+		},
+		{
+			Name: "Mine",
+			Requires: map[string]int{
+				"Stone": 10,
+			},
+		},
+		{
+			Name: "Factory",
+			Requires: map[string]int{
+				"Wood":  5,
+				"Stone": 5,
+			},
+		},
+		{
+			Name: "House",
+			Requires: map[string]int{
+				"Wood":  4,
+				"Stone": 2,
+				"Pipe":  2,
+			},
+		},
+	}
+
+	return buildings
 }
